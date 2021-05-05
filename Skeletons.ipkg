@@ -1,0 +1,45 @@
+package Skeletons
+-- version =
+authors = "Thomas E. Hansen"
+-- maintainers =
+license = "BSD-3-Clause"
+-- brief =
+-- readme =
+-- homepage =
+-- sourceloc =
+-- bugtracker =
+
+-- packages to add to search path
+-- depends =
+
+-- modules to install
+modules = Skeletons.Pipeline
+--      , Skeletons.Farm
+
+-- main file (i.e. file to load at REPL)
+-- main =
+
+-- name of executable
+-- executable =
+opts = "-p contrib"
+sourcedir = "src"
+-- builddir =
+-- outputdir =
+
+-- script to run before building
+-- prebuild =
+
+-- script to run after building
+-- postbuild =
+
+-- script to run after building, before installing
+-- preinstall =
+
+-- script to run after installing
+-- postinstall =
+
+-- script to run before cleaning
+-- preclean =
+
+-- script to run after cleaning
+-- postclean =

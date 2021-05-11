@@ -3,12 +3,6 @@ module Skeletons.Pipeline
 import System.Concurrency
 -- import Skeletons.Common
 
--- FIXME: Needed?
-||| A way of denoting the next bit of input, or the end of a pipeline.
-data PipelineData : Type -> Type where
-  Next : a -> PipelineData a
-  DONE : PipelineData d
-
 ||| A single step in a pipeline, taking an input and producing an output
 data PipelineStep : Type -> Type -> Type where
   MkStep : (a -> b) -> PipelineStep a b

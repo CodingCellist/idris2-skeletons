@@ -14,7 +14,7 @@ data WorkUnit : Type -> Type where
   STOP : WorkUnit _
 
 data WorkResult : Type -> Type where
-  RES : res -> WorkResult res
+  RES : val -> WorkResult val
   DONE : WorkResult _
 
 ||| A Farm has a max number of workers, and a list of work to be done
@@ -27,14 +27,14 @@ data Farm : Type -> Type where
 ||| in workRef, sending the results to outRef, until a `STOP` instruction is
 ||| received.
 worker : (workRef : IORef (DirectionalChannel (WorkUnit a)))
-       -> (outRef : IORef (DirectionalChannel a))
+       -> (outRef : IORef (DirectionalChannel (WorkResult a)))
        -> IO ()
 worker workRef outRef =
   do (MkDPair workChan recv) <- becomeReceiver workRef
      (MkDPair outChan send) <- becomeSender outRef
      (TASK task) <- recv workChan
-        | STOP => pure ()
-     send outChan task
+        | STOP => send outChan DONE
+     send outChan (RES task)   -- TASK is Lazy, but RES is not  => evaluation!
      -- FIXME: v  Correct use of assert_total? I'm not convinced...
      assert_total $ worker workRef outRef
 
@@ -60,7 +60,7 @@ loadWork (MkFarm nWorkers work) =
 
 spawnWorkers : (nWorkers : Nat)
              -> (workRef : IORef (DirectionalChannel (WorkUnit a)))
-             -> (outRef : IORef (DirectionalChannel a))
+             -> (outRef : IORef (DirectionalChannel (WorkResult a)))
              -> IO (List ThreadID)
 spawnWorkers 0 _ _ = pure []
 spawnWorkers (S k) workRef outRef =
@@ -69,7 +69,9 @@ spawnWorkers (S k) workRef outRef =
      pure (workerThreadID :: workerThreadIDs)
 
 ||| Run a farm, spawning n threads where n is the number of workers in the farm
-runFarm : {a : _} -> Farm a -> IO (ThreadID, IORef (DirectionalChannel a))
+runFarm : {a : _}
+        -> (farm : Farm a)
+        -> IO (ThreadID, IORef (DirectionalChannel (WorkResult a)))
 runFarm farm@(MkFarm nWorkers work) =
   do outRef <- makeDirectionalChannel
      workRef <- loadWork farm
@@ -80,21 +82,29 @@ runFarm farm@(MkFarm nWorkers work) =
 
 ||| Retrieve all the output from a farm that has been run.
 collect : (farm : Farm a)
-        -> (runRes : (ThreadID, IORef (DirectionalChannel a)))
+        -> (runRes : (ThreadID, IORef (DirectionalChannel (WorkResult a))))
         -> IO (List a)
 collect (MkFarm nWorkers _) (bundleThreadID, resRef) =
-  do resList <- collect' nWorkers resRef
+  do resList <- collect' [] nWorkers resRef
+     putStrLn "Collected all results, waiting for worker threads to stop..."
      threadWait bundleThreadID
+     putStrLn "All workers stopped, returning results."
      pure resList
   where
-    collect' : Nat -> IORef (DirectionalChannel a) -> IO (List a)
-    collect' 0 _ = pure []
-    collect' (S k) resRef =
+    collect' : List a -> Nat -> IORef (DirectionalChannel (WorkResult a)) -> IO (List a)
+    collect' acc 0 _ = pure acc
+    collect' acc (S k) resRef =
       do (MkDPair resChan recv) <- becomeReceiver resRef
-         res <- recv resChan
-         case res of
-              case_val => ?collect'_rhs_2
+         workRes <- recv resChan
+         case workRes of
+              -- FIXME     v  Correct use of `assert_total`?
+              (RES val) => assert_total $ collect' (val :: acc) (S k) resRef
+              DONE => collect' acc k resRef   -- one worker done, so reduce k
      
+
+-------------
+-- Example --
+-------------
 
 ack : Nat -> Nat -> Nat
 ack 0 j = (S j)
@@ -102,7 +112,8 @@ ack (S k) 0 = ack k 1
 ack (S k) (S j) = ack k $ ack (S k) j
 
 ackList : List (WorkUnit Nat)
-ackList = [TASK (ack 2 2), TASK (ack 3 7), TASK (ack 3 6), TASK (ack 3 7)]
+ackList = [TASK (ack 2 2), TASK (ack 4 1), TASK (ack 3 12), TASK (ack 4 1)]
+--               ^ fast          ^ slow          ^ slow-ish      ^ slow
 
 ackFarm : Farm Nat
 ackFarm = (MkFarm 6 ackList)
@@ -113,8 +124,7 @@ ackMain =
      (bundleThreadID, resRef) <- runFarm ackFarm
      putStrLn "Farm running."
      (MkDPair resChan recv) <- becomeReceiver resRef
-     res <- recv resChan
-     putStrLn $ "First res: " ++ show res
-     threadWait bundleThreadID
+     resList <- collect ackFarm (bundleThreadID, resRef)
+     putStrLn $ "Results: " ++ show resList
      putStrLn "DONE"
 

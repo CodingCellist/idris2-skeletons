@@ -83,11 +83,7 @@ runDPipeline : {y : _}
              -> (inRef : IORef (Pipe (PipelineData x) (PipelineData () )))
              -> IO (ThreadID, IORef (Pipe (PipelineData y) (PipelineData ()) ))
 runDPipeline (DEndpoint lastly) inRef =
-  do outRef <- makePipe -- {a=(PipelineData y)} {b=(PipelineData () )}
-                                               -- FIXME: ^ This seems cursed...
-                                               -- But then again, the other
-                                               -- process will never be sending
-                                               -- something back...
+  do outRef <- makePipe
      inPipe <- makeSender inRef
 
      input <- await inPipe
@@ -95,7 +91,7 @@ runDPipeline (DEndpoint lastly) inRef =
      pure (threadID, outRef)
 
 runDPipeline (DStage {b} thisStage continuation) inRef =
-  do linkRef <- makePipe -- {a=(PipelineData b)} {b=(PipelineData () )}
+  do linkRef <- makePipe
      inPipe <- makeSender inRef
 
      input <- await inPipe
@@ -158,7 +154,7 @@ squarePL = initPipeline squareStage
 partial
 squareMain : IO ()
 squareMain =
-  do inRef <- makePipe --{a=(PipelineData Nat)} {b=(PipelineData ())}
+  do inRef <- makePipe
      nats 10 inRef
      (tid, resRef) <- runDPipeline squarePL inRef
      resPipe <- makeSender resRef

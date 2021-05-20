@@ -45,8 +45,7 @@ waitOnThreadBundle : (ts : List ThreadID)
 waitOnThreadBundle ts = fork $ ignore (traverse (\t => threadWait t) ts)
 
 ||| Given a list of work, create a BufferedChannel containing all the work.
-loadWork : {a : _}
-         -> (farm : Farm a)
+loadWork : (farm : Farm a)
          -> IO (IORef (BufferedChannel (WorkUnit a)))
 loadWork (MkFarm nWorkers work) =
   do putStr "Loading work... "
@@ -69,8 +68,7 @@ spawnWorkers (S k) workRef outRef =
      pure (workerThreadID :: workerThreadIDs)
 
 ||| Run a farm, spawning n threads where n is the number of workers in the farm
-runFarm : {a : _}
-        -> (farm : Farm a)
+runFarm : (farm : Farm a)
         -> IO (ThreadID, IORef (BufferedChannel (WorkResult a)))
 runFarm farm@(MkFarm nWorkers work) =
   do outRef <- makeBufferedChannel

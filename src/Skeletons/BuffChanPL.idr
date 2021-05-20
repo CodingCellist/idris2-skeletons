@@ -21,8 +21,7 @@ data DPipelineStage : Type -> Type -> Type where
 ||| continuation Pipeline where the rest of the processing happens.
 data DPipeline : Type -> Type -> Type where
   DEndpoint : (lastly : DPipelineStage a b) -> DPipeline a b
-  DStage    : {b : Type}
-            -> (thisStage : DPipelineStage a b)
+  DStage    : (thisStage : DPipelineStage a b)
             -> (continuation : DPipeline b c)
             -> DPipeline a c
 
@@ -33,8 +32,7 @@ initPipeline initStage = DEndpoint $ MkDStep initStage
 
 
 ||| Add a Stage to the end of an existing Pipeline.
-addStage : {b : _}
-         -> (pl : DPipeline a b)
+addStage : (pl : DPipeline a b)
          -> (newStage : PipelineData b -> PipelineData c)
          -> DPipeline a c
 addStage (DEndpoint lastly) newStage =
@@ -75,8 +73,7 @@ loop stage@(MkDStep f) next inRef outRef =
 
 ||| Given a Pipeline and a Channel which supplies input for the first stage,
 ||| run each stage of the Pipeline in parallel, linking them up using Channels.
-runDPipeline : {y : _}
-             -> (pl : DPipeline x y)
+runDPipeline : (pl : DPipeline x y)
              -> (inRef : IORef (BufferedChannel (PipelineData x)))
              -> IO (ThreadID, IORef (BufferedChannel (PipelineData y)))
 runDPipeline (DEndpoint lastly) inRef =

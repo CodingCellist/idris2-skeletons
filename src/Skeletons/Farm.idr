@@ -110,11 +110,30 @@ ack (S k) 0 = ack k 1
 ack (S k) (S j) = ack k $ ack (S k) j
 
 ackList : List (WorkUnit Nat)
-ackList = [TASK (ack 2 2), TASK (ack 4 1), TASK (ack 3 12), TASK (ack 4 1)]
+ackList = replicate 16 (TASK (ack 4 1))
+--ackList = [TASK (ack 2 2), TASK (ack 4 1), TASK (ack 3 12), TASK (ack 4 1)]
 --               ^ fast          ^ slow          ^ slow-ish      ^ slow
 
+ackSeq : IO ()
+ackSeq = do putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+            putStrLn $ show $ ack 4 1
+
 ackFarm : Farm Nat
-ackFarm = (MkFarm 6 ackList)
+ackFarm = (MkFarm 8 ackList)
 
 ackMain : IO ()
 ackMain =

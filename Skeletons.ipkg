@@ -13,10 +13,9 @@ license = "BSD-3-Clause"
 -- depends =
 
 -- modules to install
-modules = Skeletons.Pipeline
-        , Skeletons.BuffChanPL
+modules = Skeletons.BuffChanPL
         , Skeletons.PipePL
---      , Skeletons.Farm
+        , Skeletons.Farm
 
 -- main file (i.e. file to load at REPL)
 -- main =

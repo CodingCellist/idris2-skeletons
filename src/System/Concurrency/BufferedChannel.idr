@@ -1,215 +1,111 @@
--- Idris 2
-
+||| A channel built on top of System.Concurrency.Queue. It is MTSafe thanks to
+||| Queues being MTSafe, and buffered as it operates using a Queue of things.
 module System.Concurrency.BufferedChannel
 
-import public Data.IORef
 import System.Concurrency
 
 import public System.Concurrency.Queue
 
+%default total
+
+||| A channel for inter-process communication where one side is the sender, and
+||| the other is the receiver.
+||| See also:
+||| - @makeBufferedChannel@
+||| - @becomeSender@
+||| - @becomeReceiver@
 export
-data BufferedChannel : Type -> Type -> Type where
-  MkBufferedChannel : {0 a : Type} -> {0 b : Type}
-                    -> (inbox  : IORef (Queue a))
-                    -> (iCondLock : Mutex)
-                    -> (iCondVar : Condition)
-                    -> (outbox : IORef (Queue b))
-                    -> (oCondLock : Mutex)
-                    -> (oCondVar : Condition)
-                    -> BufferedChannel a b
+data BufferedChannel : Type -> Type where
+  MkBufferedChannel : (condLock : Mutex)
+                    -> (condVar : Condition)
+                    -> (qRef    : IORef (Queue a))
+                    -> BufferedChannel a
 
-
----------------------------
--- CONSTRUCTOR FUNCTIONS --
----------------------------
-
-||| Create a new BufferedChannel.
+||| Create a new BufferedChannel. Since BufferedChannels are shared resources,
+||| they can only be obtained in an IORef.
+||| See also
+||| - @becomeSender@
+||| - @becomeReceiver@
 export
-makeBufferedChannel : {a : Type} -> {b : Type}
-                    -> IO (IORef (BufferedChannel a b))
-makeBufferedChannel = do iQueue <- makeQueue
-                         iCondLock <- makeMutex
-                         iCondVar <- makeCondition
-                         -- ^ inbox things
-                         -- v outbox things
-                         oQueue <- makeQueue
-                         oCondLock <- makeMutex
-                         oCondVar <- makeCondition
-                         -- create the channel in an IORef
-                         newIORef (MkBufferedChannel iQueue iCondLock iCondVar
-                                                     oQueue oCondLock oCondVar)
+makeBufferedChannel : {a : _} -> IO (IORef (BufferedChannel a))
+makeBufferedChannel =
+  do cl <- makeMutex
+     cv <- makeCondition
+     q  <- makeQueue
+     newIORef (MkBufferedChannel cl cv q)
 
-||| Given an IORef to a BufferedChannel, obtained through the
-||| `makeBufferedChannel` function, create a version which is primarily used for
-||| sending messages.
-export
-makeSender : (cRef : IORef (BufferedChannel a b)) -> IO (BufferedChannel a b)
-makeSender cRef
-  = do (MkBufferedChannel inbox iCL iCV outbox oCL oCV) <- readIORef cRef
-       pure (MkBufferedChannel inbox iCL iCV outbox oCL oCV)
+||| The type of a sender function is something which takes a channel and a thing
+||| to send, and produces an empty IO action, i.e. the sending of the message.
+public export
+SenderFunc : Type -> Type
+SenderFunc a = BufferedChannel a -> a -> IO ()
 
-||| Given an IORef to a BufferedChannel, obtained through the
-||| `makeBufferedChannel` function, create a version which is primarily used for
-||| receiving messages.
-export
-makeReceiver : (cRef : IORef (BufferedChannel a b)) -> IO (BufferedChannel b a)
-makeReceiver cRef
-  = do (MkBufferedChannel inbox iCL iCV outbox oCL oCV) <- readIORef cRef
-       pure (MkBufferedChannel outbox oCL oCV inbox iCL iCV)
-
-
-------------------------
--- INBOX MANIPULATION --
-------------------------
-
-getInbox : BufferedChannel a b -> IORef (Queue a)
-getInbox (MkBufferedChannel inbox _ _ _ _ _) = inbox
-
--- FIXME: Do we need this function?
--- ||| Wait on the condition variable for the BufferedChannel's inbox.
--- waitInbox : BufferedChannel a b -> IO ()
--- waitInbox (MkBufferedChannel inbox iCondLock iCondVar _ _ _)
---   = do mutexAcquire iCondLock
---        conditionWait iCondVar iCondLock
---
--- OLD IMPLEMENTATION
---  = do
---       conditionWait iCondVar iCondLock
---
--- OLD OLD IMPLEMENTATION
---  = conditionWait iCondVar iCondLock
-
-
--------------------------
--- OUTBOX MANIPULATION --
--------------------------
-
-getOutbox : BufferedChannel a b -> IORef (Queue b)
-getOutbox (MkBufferedChannel _ _ _ outbox _ _) = outbox
-
-||| Unlock at least one of the threads currently waiting on the outbox's
-||| condition variable.
-|||
-||| On a *nix system, see `man 3 pthread_cond_broadcast` for more details
-||| regarding the difference between this function and the `broadcastOutbox`
-||| function.
-signalOutbox : BufferedChannel a b -> IO ()
-signalOutbox (MkBufferedChannel _ _ _ _ _  oCondVar)
-  = conditionSignal oCondVar
-
-||| Unlock all of the threads currently waiting on the outbox's condition
+||| Send a thing on the BufferedChannel and signal its internal condition
 ||| variable.
 |||
-||| On a *nix system, see `man 3 pthread_cond_broadcast` for more details
-||| regarding the difference between this function and the `signalOutbox`
-||| function.
-broadcastOutbox : BufferedChannel a b -> IO ()
-broadcastOutbox (MkBufferedChannel _ _ _ _ _ oCondVar)
-  = conditionBroadcast oCondVar
+||| MTSafe: YES
+sendAndSignal : SenderFunc a
+sendAndSignal (MkBufferedChannel _ condVar qRef) thing =
+  do enqueue qRef thing
+     conditionSignal condVar
 
-
--------------
--- SENDING --
--------------
-
-||| Send a Message through the BufferedChannel and *signal* on the condition variable
-||| for the BufferedChannel's outbox to indicate to at least one blocking thread
-||| blocking on it, that a Message can be received (see `signalOutbox`).
+||| Send a thing on the BufferedChannel and broadcast its internal condition
+||| variable.
 |||
-||| @chan: The BufferedChannel to send the Message through.
-||| @msg: The Message to send.
+||| MTSafe: YES
+sendAndBroadcast : SenderFunc a
+sendAndBroadcast (MkBufferedChannel _ condVar qRef) thing =
+  do enqueue qRef thing
+     conditionBroadcast condVar
+
+||| The type of a receiver function is something which takes a channel and
+||| produces an IO action containing a thing on the channel, i.e. the receiving
+||| of the message.
+public export
+ReceiverFunc : Type -> Type
+ReceiverFunc a = BufferedChannel a -> IO a
+
+||| Crash Idris with a message signalling that something went wrong in terms of
+||| the fundamental guarantees of condition variables.
 |||
-||| MT-Safe: YES
+||| Essentially, the point of waiting on a CV is to wait until something is
+||| available for consumption. So as soon as the CV lets us past, there will be
+||| something to retrieve. However, Idris doesn't know this.
+await_crash : IO a
+await_crash =
+  assert_total $ idris_crash "Await somehow got Nothing despite waiting on a CV"
+
+||| Block on the BufferdChannel's internal condition variable until a thing
+||| arrives, and at that point, retrieve the thing.
+|||
+||| MTSafe: YES
+await : ReceiverFunc a
+await (MkBufferedChannel condLock condVar qRef) =
+  do (Just thing) <- dequeue qRef
+          -- if there wasn't anything in the queue, wait until something appears
+        | Nothing => do mutexAcquire condLock
+                        conditionWait condVar condLock
+                        (Just thing') <- dequeue qRef
+                           | Nothing => await_crash
+                        mutexRelease condLock
+                        pure thing'
+     pure thing
+
+||| Given a reference to a BufferdChannel, obtain the ability to send on the
+||| channel.
 export
-sendAndSignal : (chan : BufferedChannel a b) -> (msg : Message b) -> IO ()
-sendAndSignal chan msg =
-  do enqueue (getOutbox chan) msg
-     signalOutbox chan
+becomeSender : (bcRef : IORef (BufferedChannel a))
+             -> IO (dc : BufferedChannel a ** (SenderFunc a))
+becomeSender bcRef =
+  do theBC <- readIORef bcRef
+     pure (MkDPair theBC sendAndSignal)
 
-||| Send a Message through the BufferedChannel and *broadcast* on the condition variable
-||| for the BufferedChannel's outbox to indicate to all threads currently blocking on
-||| it, that a Message can be received (see `signalOutbox`).
-|||
-||| @chan: The BufferedChannel to send the Message through.
-||| @msg: The Message to send.
-|||
-||| MT-Safe: YES
+||| Given a reference to a BufferedChannel, obtain the ability to receive on the
+||| channel.
 export
-sendAndBroadcast : (chan : BufferedChannel a b) -> (msg : Message b) -> IO ()
-sendAndBroadcast chan msg =
-  do enqueue (getOutbox chan) msg
-     broadcastOutbox chan
-
-
----------------
--- RECEIVING --
----------------
-
-||| Receive a Message through the BufferedChannel, if there is one, removing it from the
-||| inbox in the process. Does not block but immediately returns `Nothing` if
-||| there was no message available.
-|||
-||| @chan: The BufferedChannel to receive the Message through.
-|||
-||| MT-Safe: YES
-export
-receive : (chan : BufferedChannel a b) -> IO (Maybe (Message a))
-receive chan = dequeue (getInbox chan)
-
-||| Similar to `receive`, but blocks on the condition variable of the inbox
-||| until a Message is available, at which point it receives the Message,
-||| removing it from the inbox in the process.
-|||
-||| @chan: The BufferedChannel to receive the Message through.
-|||
-||| MT-Safe: YES
-export
-await : (chan : BufferedChannel a b) -> IO (Maybe (Message a))
-await (MkBufferedChannel inbox iCondLock iCondVar _ _ _) =
-  do maybeMsg <- dequeue inbox
-     case maybeMsg of
-          -- if at first you don't succeed...
-          Nothing => do mutexAcquire iCondLock   -- see man 3 pthread_cond_await
-                        conditionWait iCondVar iCondLock
-                        rawMsg <- dequeue inbox
-                        mutexRelease iCondLock   -- FIXME: necessary? Yes. Right place for it?
-                        pure rawMsg
-          justMsg => pure justMsg
-
---------------
--- PEEK/SPY --
---------------
-
-||| Receive a Message through the BufferedChannel, if there is one, *without* removing
-||| from the inbox in the process. Does not block but immediately returns
-||| `Nothing` if there was no message available.
-|||
-||| @chan: The BufferedChannel to receive the Message through.
-|||
-||| MT-Safe: YES
-export
-peek : (chan : BufferedChannel a b) -> IO (Maybe (Message a))
-peek (MkBufferedChannel inbox _ _ _ _ _) = peek inbox
-
-||| Watches the BufferedChannel until a Message appears, at which point it "reports
-||| back" with the Message. Hence, `spy`.
-|||
-||| Similar to `peek`, but blocks on the condition variable of the inbox until
-||| a Message is available, at which point it receives the Message, *without*
-||| removing it from the BufferedChannel's inbox in the process.
-|||
-||| @chan: The BufferedChannel to receive the Message through.
-|||
-||| MT-Safe: YES
-export
-spy : (chan : BufferedChannel a b) -> IO (Maybe (Message a))
-spy (MkBufferedChannel inbox iCondLock iCondVar _ _ _) =
-  do maybeMsg <- peek inbox
-     case maybeMsg of
-          Nothing => do mutexAcquire iCondLock
-                        conditionWait iCondVar iCondLock
-                        rawMsg <- peek inbox
-                        mutexRelease iCondLock
-                        pure rawMsg
-          justMsg => pure justMsg
+becomeReceiver : (bcRef : IORef (BufferedChannel a))
+               -> IO (dc : BufferedChannel a ** (ReceiverFunc a))
+becomeReceiver bcRef =
+  do theBC <- readIORef bcRef
+     pure (MkDPair theBC await)
 

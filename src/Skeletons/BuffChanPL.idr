@@ -1,8 +1,8 @@
-module Skeletons.DirChanPL
+module Skeletons.BuffChanPL
 
 import System
 import System.Concurrency
-import System.Concurrency.DirectionalChannel
+import System.Concurrency.BufferedChannel
 
 %default total
 
@@ -57,8 +57,8 @@ infixl 8 |=>
 partial
 loop : (stage : (DPipelineStage a b))
      -> (plData : PipelineData a)
-     -> (inRef : IORef (DirectionalChannel (PipelineData a) ))
-     -> (outRef : IORef (DirectionalChannel (PipelineData b) ))
+     -> (inRef : IORef (BufferedChannel (PipelineData a) ))
+     -> (outRef : IORef (BufferedChannel (PipelineData b) ))
      -> IO ()
 loop _ DONE _ outRef =
   do (MkDPair outChan send) <- becomeSender outRef
@@ -77,10 +77,10 @@ loop stage@(MkDStep f) next inRef outRef =
 ||| run each stage of the Pipeline in parallel, linking them up using Channels.
 runDPipeline : {y : _}
              -> (pl : DPipeline x y)
-             -> (inRef : IORef (DirectionalChannel (PipelineData x)))
-             -> IO (ThreadID, IORef (DirectionalChannel (PipelineData y)))
+             -> (inRef : IORef (BufferedChannel (PipelineData x)))
+             -> IO (ThreadID, IORef (BufferedChannel (PipelineData y)))
 runDPipeline (DEndpoint lastly) inRef =
-  do outRef <- makeDirectionalChannel
+  do outRef <- makeBufferedChannel
      (MkDPair outChan send) <- becomeSender outRef
      (MkDPair inChan  recv) <- becomeReceiver inRef
 
@@ -89,7 +89,7 @@ runDPipeline (DEndpoint lastly) inRef =
      pure (threadID, outRef)
 
 runDPipeline (DStage thisStage continuation) inRef =
-  do linkRef <- makeDirectionalChannel
+  do linkRef <- makeBufferedChannel
      (MkDPair inChan recv) <- becomeReceiver inRef
 
      input <- recv inChan
@@ -99,7 +99,7 @@ runDPipeline (DStage thisStage continuation) inRef =
 
 ||| n natural numbers on outChan, in descending order
 countdown : (n : Nat)
-          -> (outRef : IORef (DirectionalChannel (PipelineData Nat)))
+          -> (outRef : IORef (BufferedChannel (PipelineData Nat)))
           -> IO ()
 countdown 0 outRef =
   do (MkDPair outChan send) <- becomeSender outRef
@@ -113,11 +113,11 @@ countdown (S k) outRef =
 
 ||| n natural numbers on outChan, in ascending order
 nats : (n : Nat)
-     -> (outRef : IORef (DirectionalChannel (PipelineData Nat)))
+     -> (outRef : IORef (BufferedChannel (PipelineData Nat)))
      -> IO ()
 nats n outRef = nats' n Z outRef
   where
-    nats' : Nat -> Nat -> IORef (DirectionalChannel (PipelineData Nat)) -> IO ()
+    nats' : Nat -> Nat -> IORef (BufferedChannel (PipelineData Nat)) -> IO ()
     nats' 0 k oRef =
       do (MkDPair outChan send) <- becomeSender oRef
          send outChan $ NEXT k
@@ -151,7 +151,7 @@ squarePL = initPipeline squareStage
 partial
 squareMain : IO ()
 squareMain =
-  do inRef <- makeDirectionalChannel
+  do inRef <- makeBufferedChannel
      nats 10 inRef
      (tid, resRef) <- runDPipeline squarePL inRef
      (MkDPair resChan recv) <- becomeReceiver resRef
@@ -161,7 +161,7 @@ squareMain =
   where
     partial
     printLoop : PipelineData String
-              -> (resChan : DirectionalChannel (PipelineData String)
+              -> (resChan : BufferedChannel (PipelineData String)
                             ** ReceiverFunc (PipelineData String))
               -> IO ()
     printLoop DONE _ = putStrLn "Received DONE"

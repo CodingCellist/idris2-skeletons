@@ -3,7 +3,7 @@ module Skeletons.Farm
 import System
 import Data.List
 
-import System.Concurrency.DirectionalChannel
+import System.Concurrency.BufferedChannel
 
 %default total
 
@@ -26,8 +26,8 @@ data Farm : Type -> Type where
 ||| A basic unit of work in a farm. Retrieves work from the channel referenced
 ||| in workRef, sending the results to outRef, until a `STOP` instruction is
 ||| received.
-worker : (workRef : IORef (DirectionalChannel (WorkUnit a)))
-       -> (outRef : IORef (DirectionalChannel (WorkResult a)))
+worker : (workRef : IORef (BufferedChannel (WorkUnit a)))
+       -> (outRef : IORef (BufferedChannel (WorkResult a)))
        -> IO ()
 worker workRef outRef =
   do (MkDPair workChan recv) <- becomeReceiver workRef
@@ -44,13 +44,13 @@ waitOnThreadBundle : (ts : List ThreadID)
                    -> IO ThreadID
 waitOnThreadBundle ts = fork $ ignore (traverse (\t => threadWait t) ts)
 
-||| Given a list of work, create a DirectionalChannel containing all the work.
+||| Given a list of work, create a BufferedChannel containing all the work.
 loadWork : {a : _}
          -> (farm : Farm a)
-         -> IO (IORef (DirectionalChannel (WorkUnit a)))
+         -> IO (IORef (BufferedChannel (WorkUnit a)))
 loadWork (MkFarm nWorkers work) =
   do putStr "Loading work... "
-     workRef <- makeDirectionalChannel
+     workRef <- makeBufferedChannel
      (MkDPair workChan send) <- becomeSender workRef
      ignore $ traverse (\w => send workChan w) work
      -- FIXME: v  Nicer way to do this?
@@ -59,8 +59,8 @@ loadWork (MkFarm nWorkers work) =
      pure workRef
 
 spawnWorkers : (nWorkers : Nat)
-             -> (workRef : IORef (DirectionalChannel (WorkUnit a)))
-             -> (outRef : IORef (DirectionalChannel (WorkResult a)))
+             -> (workRef : IORef (BufferedChannel (WorkUnit a)))
+             -> (outRef : IORef (BufferedChannel (WorkResult a)))
              -> IO (List ThreadID)
 spawnWorkers 0 _ _ = pure []
 spawnWorkers (S k) workRef outRef =
@@ -71,9 +71,9 @@ spawnWorkers (S k) workRef outRef =
 ||| Run a farm, spawning n threads where n is the number of workers in the farm
 runFarm : {a : _}
         -> (farm : Farm a)
-        -> IO (ThreadID, IORef (DirectionalChannel (WorkResult a)))
+        -> IO (ThreadID, IORef (BufferedChannel (WorkResult a)))
 runFarm farm@(MkFarm nWorkers work) =
-  do outRef <- makeDirectionalChannel
+  do outRef <- makeBufferedChannel
      workRef <- loadWork farm
      workerThreadIDs <- spawnWorkers nWorkers workRef outRef
      putStrLn $ "Spawned " ++ show nWorkers ++ " workers."
@@ -82,7 +82,7 @@ runFarm farm@(MkFarm nWorkers work) =
 
 ||| Retrieve all the output from a farm that has been run.
 collect : (farm : Farm a)
-        -> (runRes : (ThreadID, IORef (DirectionalChannel (WorkResult a))))
+        -> (runRes : (ThreadID, IORef (BufferedChannel (WorkResult a))))
         -> IO (List a)
 collect (MkFarm nWorkers _) (bundleThreadID, resRef) =
   do resList <- collect' [] nWorkers resRef
@@ -91,7 +91,7 @@ collect (MkFarm nWorkers _) (bundleThreadID, resRef) =
      putStrLn "All workers stopped, returning results."
      pure resList
   where
-    collect' : List a -> Nat -> IORef (DirectionalChannel (WorkResult a)) -> IO (List a)
+    collect' : List a -> Nat -> IORef (BufferedChannel (WorkResult a)) -> IO (List a)
     collect' acc 0 _ = pure acc
     collect' acc (S k) resRef =
       do (MkDPair resChan recv) <- becomeReceiver resRef

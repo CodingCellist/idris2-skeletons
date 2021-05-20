@@ -2,7 +2,7 @@ module Skeletons.PipePL
 
 import System
 import System.Concurrency
-import System.Concurrency.BufferedChannel
+import System.Concurrency.Pipe
 
 %default total
 
@@ -57,24 +57,22 @@ infixl 8 |=>
 partial
 loop : (stage : (DPipelineStage a b))
      -> (plData : PipelineData a)
-     -> (inRef : IORef (BufferedChannel (PipelineData a) (PipelineData () )))
-     -> (outRef : IORef (BufferedChannel (PipelineData b) (PipelineData () )))
+     -> (inRef : IORef (Pipe (PipelineData a) (PipelineData () )))
+     -> (outRef : IORef (Pipe (PipelineData b) (PipelineData () )))
      -> IO ()
 loop _ DONE _ outRef =
   do outPipe <- makeReceiver outRef     -- Slightly confusing, but this process
                                         -- is the "receiver" for the input to
                                         -- the other process; might help to
                                         -- think dual ( dual ( pipe ) ) ?
-     sendAndSignal outPipe $ prepare DONE
+     sendAndSignal outPipe DONE
 
 loop stage@(MkDStep f) next inRef outRef =
   do inPipe <- makeSender inRef       -- We're the sender/responder on this chan
      outPipe <- makeReceiver outRef
 
-     sendAndSignal outPipe $ prepare (f next)
-     (Just msg) <- await inPipe
-        | Nothing => assert_total $ idris_crash "Await should never get Nothing"
-     let next' = unsafeOpen msg     -- FIXME: not actually unsafe
+     sendAndSignal outPipe (f next)
+     next' <- await inPipe
      loop stage next' inRef outRef  -- FIXME: partial
 
 
@@ -82,67 +80,59 @@ loop stage@(MkDStep f) next inRef outRef =
 ||| run each stage of the Pipeline in parallel, linking them up using Channels.
 runDPipeline : {y : _}
              -> (pl : DPipeline x y)
-             -> (inRef : IORef (BufferedChannel (PipelineData x)
-                                                (PipelineData () )))
-             -> IO (ThreadID, IORef (BufferedChannel (PipelineData y)
-                                                     (PipelineData () ) ))
+             -> (inRef : IORef (Pipe (PipelineData x) (PipelineData () )))
+             -> IO (ThreadID, IORef (Pipe (PipelineData y) (PipelineData ()) ))
 runDPipeline (DEndpoint lastly) inRef =
-  do outRef <- makeBufferedChannel {a=(PipelineData y)} {b=(PipelineData () )}
+  do outRef <- makePipe -- {a=(PipelineData y)} {b=(PipelineData () )}
                                                -- FIXME: ^ This seems cursed...
                                                -- But then again, the other
                                                -- process will never be sending
                                                -- something back...
      inPipe <- makeSender inRef
 
-     (Just msg) <- await inPipe
-        | Nothing => assert_total $ idris_crash "Await should never get Nothing"
-     let input = unsafeOpen msg   -- FIXME: not actually unsafe
+     input <- await inPipe
      threadID <- fork $ loop lastly input inRef outRef
      pure (threadID, outRef)
 
 runDPipeline (DStage {b} thisStage continuation) inRef =
-  do linkRef <- makeBufferedChannel {a=(PipelineData b)} {b=(PipelineData () )}
+  do linkRef <- makePipe -- {a=(PipelineData b)} {b=(PipelineData () )}
      inPipe <- makeSender inRef
 
-     (Just msg) <- await inPipe
-        | Nothing => assert_total $ idris_crash "Await should never get Nothing"
-     let input = unsafeOpen msg     -- FIXME: not actually unsafe
+     input <- await inPipe
      doWeCare <- fork $ loop thisStage input inRef linkRef
      runDPipeline continuation linkRef
 
 
 ||| n natural numbers on outChan, in descending order
 countdown : (n : Nat)
-          -> (outRef : IORef (BufferedChannel (PipelineData Nat)
-                                              (PipelineData () ) ))
+          -> (outRef : IORef (Pipe (PipelineData Nat) (PipelineData () ) ))
           -> IO ()
 countdown 0 outRef =
   do outPipe <- makeReceiver outRef
-     sendAndSignal outPipe $ prepare DONE
+     sendAndSignal outPipe DONE
 
 countdown (S k) outRef =
   do outPipe <- makeReceiver outRef
-     sendAndSignal outPipe $ prepare (NEXT (S k))
+     sendAndSignal outPipe (NEXT (S k))
      countdown k outRef
 
 
 ||| n natural numbers on outChan, in ascending order
 nats : (n : Nat)
-     -> (outRef : IORef (BufferedChannel (PipelineData Nat)
-                                         (PipelineData () ) ))
+     -> (outRef : IORef (Pipe (PipelineData Nat) (PipelineData () ) ))
      -> IO ()
 nats n outRef = nats' n Z outRef
   where
     nats' : Nat
           -> Nat
-          -> IORef (BufferedChannel (PipelineData Nat) (PipelineData ()) )
+          -> IORef (Pipe (PipelineData Nat) (PipelineData ()) )
           -> IO ()
     nats' 0 k oRef = do outPipe <- makeReceiver oRef
-                        sendAndSignal outPipe $ prepare (NEXT k)
-                        sendAndSignal outPipe $ prepare DONE
+                        sendAndSignal outPipe (NEXT k)
+                        sendAndSignal outPipe DONE
 
     nats' (S j) k oRef = do outPipe <- makeReceiver oRef
-                            sendAndSignal outPipe $ prepare (NEXT k)
+                            sendAndSignal outPipe (NEXT k)
                             nats' j (S k) oRef
 
 
@@ -168,27 +158,21 @@ squarePL = initPipeline squareStage
 partial
 squareMain : IO ()
 squareMain =
-  do inRef <- makeBufferedChannel {a=(PipelineData Nat)} {b=(PipelineData ())}
+  do inRef <- makePipe --{a=(PipelineData Nat)} {b=(PipelineData ())}
      nats 10 inRef
      (tid, resRef) <- runDPipeline squarePL inRef
      resPipe <- makeSender resRef
-     (Just msg) <- await resPipe
-        | Nothing => assert_total $ idris_crash "Await should never get Nothing"
-     let firstThing = unsafeOpen msg    -- FIXME: Not actually unsafe
+     firstThing <- await resPipe
      printLoop firstThing resRef
      putStrLn "Main done"
   where
     partial
     printLoop : PipelineData String
-              -> IORef (BufferedChannel (PipelineData String)
-                                        (PipelineData ()    ))
+              -> IORef (Pipe (PipelineData String) (PipelineData ()))
               -> IO ()
     printLoop DONE _ = putStrLn "Received DONE"
     printLoop (NEXT x) rRef = do putStrLn x
                                  rPipe <- makeSender rRef
-                                 (Just msg') <- await rPipe
-                                    | Nothing => assert_total $
-                                                 idris_crash "Got Nothing"
-                                 let next = unsafeOpen msg'
+                                 next <- await rPipe
                                  printLoop next rRef
 

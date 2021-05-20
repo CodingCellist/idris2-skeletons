@@ -5,8 +5,8 @@ Idris2
 
 # Progress
 
-- [ ] Pipelines
-- [ ] Farms
+- [x] Pipelines
+- [x] Farms
 - [ ] ThreadPool/Workpool?
 - [ ] Map?
 - [ ] MapReduce?

@@ -1,193 +1,182 @@
--- Idris 2
-
-||| A Queue implementation based on the description in Purely Functional Data
-||| Structures by Chris Okasaki
+||| A queue implementation based on the description in "Purely Functional Data
+||| Structures" by Chris Okasaki
 module System.Concurrency.Queue
 
 import Data.List
-import Data.IORef
 import System.Concurrency
 
--- Box, but sensibly named
-export
-data Message : Type -> Type where
-  MkMessage : (contents : a) -> Message a
+import public Data.IORef
 
-||| Prepare something for sending by putting it in a Message. Note that there is
-||| no way to safely retrieve items from a Message once they're in there!
-|||
-||| @item: the thing to put in the message
-export
-prepare : (item : ty) -> Message ty
-prepare item = MkMessage item
+-----------
+-- Stack --
+-----------
 
-||| Open a message, expecting it to contain something of `expectedType`. Note
-||| however, that we cannot possibly guarantee that the message actually
-||| contains this, since it has come from the outside (hence 'unsafe').
-|||
-||| @msg: the message to open
-||| @expectedType: the Type that the contents are assumed to have
-export
-unsafeOpen : Message ty -> ty
-unsafeOpen (MkMessage contents) = contents
-
-public export
+||| A convenient alias to make it easier to reason about operations
 Stack : Type -> Type
-Stack a = List (Message a)
+Stack = List
 
-emptyStack : {0 a : Type} -> Stack a
+emptyStack : Stack a
 emptyStack = []
 
-makeStack : {a : Type} -> IO (IORef (Stack a))
-makeStack = newIORef emptyStack
+||| Create a new, empty stack.
+||| For internal use.
+makeSharedStack : IO (IORef (Stack a))
+makeSharedStack = newIORef emptyStack
 
-namespace Stack
-  ||| Put something at the top of the stack.
-  |||
-  ||| MT-Safe: NO
-  export
-  push : {0 a : Type}
-       -> (sRef : IORef (Stack a))
-       -> (msg : Message a)
-       -> IO ()
-  push sRef msg = modifyIORef sRef ((::) msg)
+||| Put something on the top of the stack.
+||| For internal use.
+|||
+||| MTSafe: NO
+push : (sRef : IORef (Stack a)) -> (thing : a) -> IO ()
+push sRef thing = modifyIORef sRef ((::) thing)
 
-  ||| Get the first item on the stack if there is one, removing it in the
-  ||| process.
-  |||
-  ||| MT-Safe: NO
-  export
-  pop : {0 a : Type} -> (sRef : IORef (Stack a)) -> IO (Maybe (Message a))
-  pop sRef = do stack <- readIORef sRef
-                case stack of
-                     [] => pure Nothing
-                     (m :: ms) => do writeIORef sRef ms
-                                     pure (Just m)
+||| Get the first item on the stack if there is one, removing it in the process.
+||| For internal use.
+|||
+||| MTSafe: NO
+pop : (sRef : IORef (Stack a)) -> IO (Maybe a)
+pop sRef = do stack <- readIORef sRef
+              case stack of
+                   [] => pure Nothing
+                   (x :: xs) => do writeIORef sRef xs
+                                   pure (Just x)
 
-  ||| Get the first item on the stack if there is one, without removing it.
-  |||
-  ||| MT-Safe: NO
-  export
-  peek : {0 a : Type} -> (sRef : IORef (Stack a)) -> IO (Maybe (Message a))
-  peek sRef = do stack <- readIORef sRef
-                 case stack of
-                      [] => pure Nothing
-                      (m :: ms) => pure (Just m)
+||| Get the first item on the stack if there is one, without removing it.
+||| For internal use.
+|||
+||| MTSafe: NO
+stackPeek : (sRef : IORef (Stack a)) -> IO (Maybe a)
+stackPeek sRef = do stack <- readIORef sRef
+                    case stack of
+                         [] => pure Nothing
+                         (x :: xs) => pure (Just x)
 
+-----------
+-- Queue --
+-----------
+
+||| A FIFO data structure.
 export
 data Queue : Type -> Type where
-  MkQueue : {0 a : Type}
-          -> (front : IORef (Stack a))
-          -> (rear  : IORef (Stack a))
+  MkQueue : (front : IORef (Stack a))
+          -> (rear : IORef (Stack a))
           -> (lock : Mutex)
           -> Queue a
 
+-- Accessors and constructor function --
+
+||| Accessor for `front`.
+||| For internal use.
 getFront : Queue a -> IORef (Stack a)
 getFront (MkQueue front _ _) = front
 
+||| Accessor for `rear`.
+||| For internal use.
 getRear : Queue a -> IORef (Stack a)
 getRear (MkQueue _ rear _) = rear
 
 ||| Create a new, empty queue.
 export
-makeQueue : {a : Type} -> IO (IORef (Queue a))
-makeQueue = do qLock <- makeMutex
-               fRef <- makeStack
-               rRef <- makeStack
-               newIORef (MkQueue fRef rRef qLock)
+makeQueue : IO (IORef (Queue a))
+makeQueue =
+  do front <- makeSharedStack
+     rear <- makeSharedStack
+     lock <- makeMutex
+     newIORef (MkQueue front rear lock)
 
-namespace Queue
-  ||| Lock the queue by acquiring its mutex.
-  ||| (ONLY FOR INTERNAL USE)
-  |||
-  ||| MT-Safe: NO
-  lockQueue : Queue _ -> IO ()
-  lockQueue (MkQueue _ _ lock) = mutexAcquire lock
 
-  ||| Unlock the queue by releasing its mutex.
-  ||| (ONLY FOR INTERNAL USE)
-  |||
-  ||| MT-Safe: NO
-  unlockQueue : Queue _ -> IO ()
-  unlockQueue (MkQueue _ _ lock) = mutexRelease lock
+-- Lock manipulation --
 
-  ||| Move the rear to the front. Used when we're out of items in the front and
-  ||| there may be items in the rear.
-  ||| (ONLY FOR INTERNAL USE)
-  |||
-  ||| MT-Safe: NO
-  reorder : {0 a : Type}
-          -> (frontRef : IORef (Stack a))
-          -> (rearRef : IORef (Stack a))
-          -> IO ()
-  reorder frontRef rearRef = do rear <- readIORef rearRef
-                                case rear of
-                                     [] => pure ()
-                                     xs => do writeIORef frontRef (reverse xs)
-                                              writeIORef rearRef emptyStack
+||| Lock the queue by acquiring its mutex.
+||| For internal use.
+lockQueue : Queue _ -> IO ()
+lockQueue (MkQueue _ _ lock) = mutexAcquire lock
 
-  ||| Put a message at the end of the queue.
-  |||
-  ||| MT-Safe: YES
-  export
-  enqueue : {0 a : Type}
-          -> (qRef : IORef (Queue a))
-          -> (msg : Message a)
-          -> IO ()
-  enqueue qRef msg = do queue <- readIORef qRef
-                        lockQueue queue
-                        push (getRear queue) msg
+||| Unlock the queue by releasing its mutex.
+||| For internal use.
+unlockQueue : Queue _ -> IO ()
+unlockQueue (MkQueue _ _ lock) = mutexRelease lock
+
+
+-- Queue manipulation --
+
+||| Move the `rear` to the `front`. Used when the queue appears to have run out
+||| of items but there may be items in the rear.
+||| For internal use.
+|||
+||| MTSafe: NO
+reorder : (frontRef : IORef (Stack a))
+        -> (rearRef : IORef (Stack a))
+        -> IO ()
+reorder frontRef rearRef =
+  do rear <- readIORef rearRef
+     case rear of
+          [] => pure ()   -- Nothing to do
+          xs => do writeIORef frontRef (reverse xs)
+                   writeIORef rearRef emptyStack
+
+||| Put a thing at the end of the queue.
+|||
+||| MTSafe: YES
+export
+enqueue : (sharedQueue : IORef (Queue a))
+        -> (thing : a)
+        -> IO ()
+enqueue sharedQueue thing =
+  do queue <- readIORef sharedQueue
+     lockQueue queue
+     push (getRear queue) thing
+     unlockQueue queue
+
+||| Get a thing from the front of the queue if there is one, removing it in the
+||| process.
+|||
+||| MTSafe: YES
+export
+dequeue : (sharedQueue : IORef (Queue a))
+        -> IO (Maybe a)
+dequeue sharedQueue =
+  do queue <- readIORef sharedQueue
+     lockQueue queue
+     let frontRef = getFront queue
+     let rearRef  = getRear  queue
+     maybeFront <- pop frontRef
+     case maybeFront of
+          (Just thing) => do unlockQueue queue
+                             pure (Just thing)
+
+          Nothing => do -- reorder and try again
+                        reorder frontRef rearRef
+                        maybeFront' <- pop frontRef
+                        -- no need to inspect maybeFront' since theres nothing
+                        -- to do if we got another Nothing; then the queue is
+                        -- empty
                         unlockQueue queue
+                        pure maybeFront'
 
-  ||| Get a message from the queue if there is one, removing it in the process.
-  |||
-  ||| MT-Safe: YES
-  export
-  dequeue : {0 a : Type}
-          -> (qRef : IORef (Queue a))
-          -> IO (Maybe (Message a))
-  dequeue qRef =
-    do queue <- readIORef qRef
-       lockQueue queue
-       let frontRef = getFront queue
-       let rearRef  = getRear  queue
-       maybeFront <- pop frontRef
-       case maybeFront of
-            Nothing =>
-              do reorder frontRef rearRef
-                 maybeFront' <- pop frontRef
-                 case maybeFront' of
-                      Nothing => do unlockQueue queue
-                                    pure Nothing
-                      (Just msg') => do unlockQueue queue
-                                        pure (Just msg')
+||| Get a thing from the front of the queue if there is one, without removing
+||| it.
+|||
+||| MTSafe: YES
+export
+peek : (sharedQueue : IORef (Queue a))
+        -> IO (Maybe a)
+peek sharedQueue =
+  do queue <- readIORef sharedQueue
+     lockQueue queue
+     let frontRef = getFront queue
+     let rearRef  = getRear  queue
+     maybeFront <- stackPeek frontRef
+     case maybeFront of
+          (Just thing) => do unlockQueue queue
+                             pure (Just thing)
 
-            (Just msg) => do unlockQueue queue
-                             pure (Just msg)
-
-  ||| Get a message from the queue if there is one, without removing it.
-  |||
-  ||| MT-Safe: YES
-  export
-  peek : {0 a : Type}
-       -> (qRef : IORef (Queue a))
-       -> IO (Maybe (Message a))
-  peek qRef =
-    do queue <- readIORef qRef
-       lockQueue queue
-       let frontRef = getFront queue
-       let rearRef  = getRear  queue
-       maybeFront <- peek frontRef
-       case maybeFront of
-            Nothing =>
-              do reorder frontRef rearRef
-                 maybeFront' <- peek frontRef
-                 case maybeFront' of
-                      Nothing     => do unlockQueue queue
-                                        pure Nothing
-                      (Just msg') => do unlockQueue queue
-                                        pure (Just msg')
-
-            (Just msg) => do unlockQueue queue
-                             pure (Just msg)
+          Nothing => do -- reorder and try again
+                        reorder frontRef rearRef
+                        maybeFront' <- stackPeek frontRef
+                        -- no need to inspect maybeFront' since theres nothing
+                        -- to do if we got another Nothing; then the queue is
+                        -- empty
+                        unlockQueue queue
+                        pure maybeFront'
 

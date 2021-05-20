@@ -14,6 +14,8 @@ license = "BSD-3-Clause"
 
 -- modules to install
 modules = Skeletons.Pipeline
+        , Skeletons.BuffChanPL
+        , Skeletons.PipePL
 --      , Skeletons.Farm
 
 -- main file (i.e. file to load at REPL)
@@ -21,7 +23,7 @@ modules = Skeletons.Pipeline
 
 -- name of executable
 -- executable =
-opts = "-p contrib"
+--opts = "-p contrib"
 sourcedir = "src"
 -- builddir =
 -- outputdir =

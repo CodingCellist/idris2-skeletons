@@ -59,12 +59,12 @@ loop : (stage : (DPipelineStage a b))
      -> (outRef : IORef (BufferedChannel (PipelineData b) ))
      -> IO ()
 loop _ DONE _ outRef =
-  do (MkDPair outChan send) <- becomeSender outRef
+  do (MkDPair outChan send) <- becomeSender Signal outRef
      send outChan DONE
 
 loop stage@(MkDStep f) next inRef outRef =
-  do (MkDPair outChan send) <- becomeSender outRef
-     (MkDPair inChan  recv) <- becomeReceiver inRef
+  do (MkDPair outChan send) <- becomeSender Signal outRef
+     (MkDPair inChan  recv) <- becomeReceiver Blocking inRef
      
      send outChan (f next)
      next' <- recv inChan
@@ -78,8 +78,8 @@ runDPipeline : (pl : DPipeline x y)
              -> IO (ThreadID, IORef (BufferedChannel (PipelineData y)))
 runDPipeline (DEndpoint lastly) inRef =
   do outRef <- makeBufferedChannel
-     (MkDPair outChan send) <- becomeSender outRef
-     (MkDPair inChan  recv) <- becomeReceiver inRef
+     (MkDPair outChan send) <- becomeSender Signal outRef
+     (MkDPair inChan  recv) <- becomeReceiver Blocking inRef
 
      input <- recv inChan
      threadID <- fork $ loop lastly input inRef outRef
@@ -87,7 +87,7 @@ runDPipeline (DEndpoint lastly) inRef =
 
 runDPipeline (DStage thisStage continuation) inRef =
   do linkRef <- makeBufferedChannel
-     (MkDPair inChan recv) <- becomeReceiver inRef
+     (MkDPair inChan recv) <- becomeReceiver Blocking inRef
 
      input <- recv inChan
      doWeCare <- fork $ loop thisStage input inRef linkRef
@@ -99,11 +99,11 @@ countdown : (n : Nat)
           -> (outRef : IORef (BufferedChannel (PipelineData Nat)))
           -> IO ()
 countdown 0 outRef =
-  do (MkDPair outChan send) <- becomeSender outRef
+  do (MkDPair outChan send) <- becomeSender Signal outRef
      send outChan DONE
 
 countdown (S k) outRef =
-  do (MkDPair outChan send) <- becomeSender outRef
+  do (MkDPair outChan send) <- becomeSender Signal outRef
      send outChan $ NEXT (S k)
      countdown k outRef
 
@@ -116,12 +116,12 @@ nats n outRef = nats' n Z outRef
   where
     nats' : Nat -> Nat -> IORef (BufferedChannel (PipelineData Nat)) -> IO ()
     nats' 0 k oRef =
-      do (MkDPair outChan send) <- becomeSender oRef
+      do (MkDPair outChan send) <- becomeSender Signal oRef
          send outChan $ NEXT k
          send outChan DONE
 
     nats' (S j) k oRef =
-      do (MkDPair outChan send) <- becomeSender oRef
+      do (MkDPair outChan send) <- becomeSender Signal oRef
          send outChan $ NEXT k
          nats' j (S k) oRef
 
@@ -151,7 +151,7 @@ squareMain =
   do inRef <- makeBufferedChannel
      nats 10 inRef
      (tid, resRef) <- runDPipeline squarePL inRef
-     (MkDPair resChan recv) <- becomeReceiver resRef
+     (MkDPair resChan recv) <- becomeReceiver Blocking resRef
      firstRes <- recv resChan
      printLoop firstRes (MkDPair resChan recv)
      putStrLn "Main done."
@@ -159,7 +159,7 @@ squareMain =
     partial
     printLoop : PipelineData String
               -> (resChan : BufferedChannel (PipelineData String)
-                            ** ReceiverFunc (PipelineData String))
+                            ** BlockingReceiver (PipelineData String))
               -> IO ()
     printLoop DONE _ = putStrLn "Received DONE"
     printLoop (NEXT s) resDPair@(MkDPair resChan recv) =

@@ -30,8 +30,8 @@ worker : (workRef : IORef (BufferedChannel (WorkUnit a)))
        -> (outRef : IORef (BufferedChannel (WorkResult a)))
        -> IO ()
 worker workRef outRef =
-  do (MkDPair workChan recv) <- becomeReceiver workRef
-     (MkDPair outChan send) <- becomeSender outRef
+  do (MkDPair workChan recv) <- becomeReceiver Blocking workRef
+     (MkDPair outChan send) <- becomeSender Signal outRef
      (TASK task) <- recv workChan
         | STOP => send outChan DONE
      send outChan (RES task)   -- TASK is Lazy, but RES is not  => evaluation!
@@ -50,7 +50,7 @@ loadWork : (farm : Farm a)
 loadWork (MkFarm nWorkers work) =
   do putStr "Loading work... "
      workRef <- makeBufferedChannel
-     (MkDPair workChan send) <- becomeSender workRef
+     (MkDPair workChan send) <- becomeSender Signal workRef
      ignore $ traverse (\w => send workChan w) work
      -- FIXME: v  Nicer way to do this?
      ignore $ for (replicate nWorkers STOP) (\stop => send workChan stop)
@@ -92,7 +92,7 @@ collect (MkFarm nWorkers _) (bundleThreadID, resRef) =
     collect' : List a -> Nat -> IORef (BufferedChannel (WorkResult a)) -> IO (List a)
     collect' acc 0 _ = pure acc
     collect' acc (S k) resRef =
-      do (MkDPair resChan recv) <- becomeReceiver resRef
+      do (MkDPair resChan recv) <- becomeReceiver Blocking resRef
          workRes <- recv resChan
          case workRes of
               -- FIXME     v  Correct use of `assert_total`?
@@ -140,7 +140,7 @@ ackMain =
   do putStrLn "Starting..."
      (bundleThreadID, resRef) <- runFarm ackFarm
      putStrLn "Farm running."
-     (MkDPair resChan recv) <- becomeReceiver resRef
+     (MkDPair resChan recv) <- becomeReceiver Blocking resRef
      resList <- collect ackFarm (bundleThreadID, resRef)
      putStrLn $ "Results: " ++ show resList
      putStrLn "DONE"

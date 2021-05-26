@@ -59,14 +59,14 @@ loop : (stage : (DPipelineStage a b))
      -> (outRef : IORef (BufferedChannel (PipelineData b) ))
      -> IO ()
 loop _ DONE _ outRef =
-  do (MkDPair outChan send) <- becomeSender Signal outRef
-     send outChan DONE
+  do (MkDPair outChan send) <- becomeSender outRef
+     send Signal outChan DONE
 
 loop stage@(MkDStep f) next inRef outRef =
-  do (MkDPair outChan send) <- becomeSender Signal outRef
+  do (MkDPair outChan send) <- becomeSender outRef
      (MkDPair inChan  recv) <- becomeReceiver Blocking inRef
      
-     send outChan (f next)
+     send Signal outChan (f next)
      next' <- recv inChan
      loop stage next' inRef outRef
 
@@ -78,7 +78,7 @@ runDPipeline : (pl : DPipeline x y)
              -> IO (ThreadID, IORef (BufferedChannel (PipelineData y)))
 runDPipeline (DEndpoint lastly) inRef =
   do outRef <- makeBufferedChannel
-     (MkDPair outChan send) <- becomeSender Signal outRef
+     -- (MkDPair outChan send) <- becomeSender Signal outRef
      (MkDPair inChan  recv) <- becomeReceiver Blocking inRef
 
      input <- recv inChan
@@ -99,12 +99,12 @@ countdown : (n : Nat)
           -> (outRef : IORef (BufferedChannel (PipelineData Nat)))
           -> IO ()
 countdown 0 outRef =
-  do (MkDPair outChan send) <- becomeSender Signal outRef
-     send outChan DONE
+  do (MkDPair outChan send) <- becomeSender outRef
+     send Signal outChan DONE
 
 countdown (S k) outRef =
-  do (MkDPair outChan send) <- becomeSender Signal outRef
-     send outChan $ NEXT (S k)
+  do (MkDPair outChan send) <- becomeSender outRef
+     send Signal outChan $ NEXT (S k)
      countdown k outRef
 
 
@@ -116,13 +116,13 @@ nats n outRef = nats' n Z outRef
   where
     nats' : Nat -> Nat -> IORef (BufferedChannel (PipelineData Nat)) -> IO ()
     nats' 0 k oRef =
-      do (MkDPair outChan send) <- becomeSender Signal oRef
-         send outChan $ NEXT k
-         send outChan DONE
+      do (MkDPair outChan send) <- becomeSender oRef
+         send Signal outChan $ NEXT k
+         send Signal outChan DONE
 
     nats' (S j) k oRef =
-      do (MkDPair outChan send) <- becomeSender Signal oRef
-         send outChan $ NEXT k
+      do (MkDPair outChan send) <- becomeSender oRef
+         send Signal outChan $ NEXT k
          nats' j (S k) oRef
 
 

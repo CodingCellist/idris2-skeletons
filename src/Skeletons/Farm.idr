@@ -31,10 +31,11 @@ worker : (workRef : IORef (BufferedChannel (WorkUnit a)))
        -> IO ()
 worker workRef outRef =
   do (MkDPair workChan recv) <- becomeReceiver Blocking workRef
-     (MkDPair outChan send) <- becomeSender Signal outRef
+     (MkDPair outChan send) <- becomeSender outRef
      (TASK task) <- recv workChan
-        | STOP => send outChan DONE
-     send outChan (RES task)   -- TASK is Lazy, but RES is not  => evaluation!
+        | STOP => send Signal outChan DONE
+     send Signal outChan (RES task)
+     --                   ^ TASK is Lazy, but RES is not  => evaluation!
      -- FIXME: v  Correct use of assert_total? I'm not convinced...
      assert_total $ worker workRef outRef
 
@@ -50,7 +51,8 @@ loadWork : (farm : Farm a)
 loadWork (MkFarm nWorkers work) =
   do putStr "Loading work... "
      workRef <- makeBufferedChannel
-     (MkDPair workChan send) <- becomeSender Signal workRef
+     (MkDPair workChan flexSend) <- becomeSender workRef
+     let send = flexSend Signal 
      ignore $ traverse (\w => send workChan w) work
      -- FIXME: v  Nicer way to do this?
      ignore $ for (replicate nWorkers STOP) (\stop => send workChan stop)

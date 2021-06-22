@@ -1,9 +1,9 @@
 IDRIS ?= idris2
 SRC_DIR = src
 TRGT = Skeletons
-IDR_FILES := $(SRC_DIR)/Skeletons/Farm.idr
-IDR_FILES += $(SRC_DIR)/Skeletons/PipePL.idr
-IDR_FILES += $(SRC_DIR)/Skeletons/BuffChanPL.idr
+IDR_FILES := $(SRC_DIR)/Skeletons.idr
+IDR_FILES += $(SRC_DIR)/Skeletons/Farm.idr
+IDR_FILES += $(SRC_DIR)/Skeletons/Pipeline.idr
 IPKG_FILE = $(TRGT).ipkg
 
 all: $(TRGT)
